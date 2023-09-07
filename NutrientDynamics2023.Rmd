@@ -1,0 +1,341 @@
+---
+title: "NutrientDynamics"
+author: "Paulina Murray"
+date: "2023-09-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prelims}
+
+library(tidyverse) # tidy data
+library(ggplot2) # visuals
+library(cowplot)
+library(ggpubr) # ggarrange
+library(vegan) # analyses
+library(nlme) # lme
+library(piecewiseSEM) # rsquared
+library(emmeans) # post hoc
+
+setwd('/Users/Paulina/Desktop/Data Portfolio') # working directory
+
+scg.trts <- read.csv('SCG_Stake_Data_Jan_2023.csv') # import treatment data
+scg.trts$Plot <- sub("_", "", scg.trts$Plot)
+scg.trts$Plot <- sub("_", "", scg.trts$Plot) # removing underscores in Plot
+scg.trts$PlotID <- scg.trts$Plot
+scg.trts$Treatment <- factor(scg.trts$Treatment, levels = c('CTL', 'MTX', 'SML', 'LGE')) # adding levels to treatments
+
+# covariates
+dsi_data <- read.csv('ASCC_SCG_DSIonly.csv') # import DSI data
+
+dsi_data$block <- NULL
+dsi_data$blocktreat <- NULL
+dsi_data$PlotTR <- NULL
+dsi_data$bare_ground_pre <- NULL
+dsi_data$bare_ground_post1 <- NULL
+
+covars <- merge(x = scg.trts, y = dsi_data, by = "PlotID") # merge trts & dsi
+
+```
+
+```{r Old CN Dataset}
+
+## original cn data
+wood.cn <- read.csv('wood_cn.csv') # import old CN data
+
+wood.cn$Weight...mg. <- NULL # remove uneccessary columns
+wood.cn$Method <- NULL   
+wood.cn$N..Area <- NULL
+wood.cn$C..Area <- NULL
+wood.cn$N..Factor <- NULL
+wood.cn$C..Factor <- NULL
+wood.cn$Time <- NULL
+#wood.cn$C..Blank <- NULL
+#wood.cn$Memo <- NULL
+wood.cn$Info <- NULL
+wood.cn$Date <- NULL
+#wood.cn$X <- NULL
+#wood.cn$Moisture..... <- NULL
+
+# Adding column based on other column:
+wood.cn <- wood.cn %>%
+  mutate(Sample.Type = case_when(
+    endsWith(Name, "i") ~ "i",
+    endsWith(Name, "p") ~ "p"
+    ))
+wood.cn$Name <- sub('i','',wood.cn$Name) # remove i & p from end of names
+wood.cn$Name <- sub('p','',wood.cn$Name)
+
+colnames(wood.cn)[1] = 'Stake_Tag' # change column name
+
+og.cn.initial <- subset(wood.cn, Sample.Type == 'i') # subset initial conditions
+og.cn.initial <- og.cn.initial %>% arrange(Stake_Tag)
+og.cn.post <- subset(wood.cn, Sample.Type == 'p') # subset post conditions
+og.cn.post <- og.cn.post %>% arrange(Stake_Tag)
+# remove sample 331
+og.cn.post <- og.cn.post[-7,]
+
+## calculating change in CN ratios ##
+og.C.N.ratio.percent.dec <- (og.cn.initial$C.N..ratio - og.cn.post$C.N..ratio)
+og.C.N.ratio.percent <- (og.C.N.ratio.percent.dec/og.cn.initial$C.N..ratio)*100
+og.cn.initial['C.N.ratio.percent'] <- og.C.N.ratio.percent
+og.cn.post['C.N.ratio.percent'] <- og.C.N.ratio.percent
+
+og.cn.data <- rbind(og.cn.initial, og.cn.post) # combine initial & post df's
+og.cn.trts <- merge(x = scg.trts, y = og.cn.data, by = 'Stake_Tag') # combine ALL CN df & treatments
+og.cn.trts.post <- merge(og.cn.post, y = scg.trts, by = 'Stake_Tag') # combine POST CN df & treatments
+og.cn.trts.post$Treatment <- factor(og.cn.trts.post$Treatment, levels = c('CTL', 'MTX', 'SML', 'LGE')) # adding levels to treatments
+
+
+```
+
+```{r New CN Dataset}
+
+## UNCORRECTED Carbon ##
+new_cn_data <- read.csv('CN_data_June.csv') # import new CN data
+## CORRECTED Carbon ##
+#cn.corrected <- read.csv('New_CN_data_corrected.csv')
+
+new_cn_data$Weight...mg. <- NULL # remove uneccessary columns
+new_cn_data$Method <- NULL   
+new_cn_data$N..Area <- NULL
+new_cn_data$C..Area <- NULL
+new_cn_data$N..Factor <- NULL
+new_cn_data$C..Factor <- NULL
+new_cn_data$N..Blank <- NULL
+new_cn_data$C..Blank <- NULL
+new_cn_data$Memo <- NULL
+new_cn_data$Info <- NULL
+new_cn_data$Date.......Time <- NULL
+new_cn_data$X <- NULL
+new_cn_data$Moisture..... <- NULL
+
+new_cn_data <- subset(new_cn_data, Name != 'Blank-') # remove unnecessary rows
+new_cn_data <- subset(new_cn_data, Name != 'acetanilide')
+new_cn_data <- subset(new_cn_data, Name != 'RunIn')
+new_cn_data <- subset(new_cn_data, Name != 'clearingnotblank')
+new_cn_data <- subset(new_cn_data, Name != 'leavesqc')
+new_cn_data <- subset(new_cn_data, Name != 'soilqc')
+new_cn_data <- subset(new_cn_data, Name != 'magic') 
+
+post.303 <- new_cn_data[1:3,] # subset trial samples for avg
+post.303.mean <- colMeans(post.303[c('N.....', 'C.....', 'C.N..ratio')]) # avg for each column 
+post.244 <- new_cn_data[4:6,] # subset trial samples for avg
+post.244.mean <- colMeans(post.244[c('N.....', 'C.....', 'C.N..ratio')]) # avg for each column 
+post.277 <- subset(new_cn_data, Name == '277p')# subset trial samples for avg
+post.277.mean <- colMeans(post.277[c('N.....', 'C.....', 'C.N..ratio')]) # avg for each column 
+
+new_cn_data[nrow(new_cn_data) + 1,] <- list('303p', 0.28, 47.32, 169.1) # add new row for 303p
+new_cn_data <- new_cn_data[-c(1:3),] # remove 303p trials
+new_cn_data[nrow(new_cn_data) + 1,] <- list('244p', 0.66, 48.42, 73.03) # add new row for 244p
+new_cn_data <- new_cn_data[-c(1:3),] # remove 244p trials
+new_cn_data[nrow(new_cn_data) + 1,] <- list('277p', 0.31, 45.95, 149.94) # add new row for 277p
+new_cn_data <- new_cn_data[-c(14:15),] # remove 277p trials
+
+# Adding column based on other column:
+new_cn_data <- new_cn_data %>%
+  mutate(Sample.Type = case_when(
+    endsWith(Name, "i") ~ "i",
+    endsWith(Name, "p") ~ "p"
+    ))
+new_cn_data$Name <- sub('i','',new_cn_data$Name) # remove i & p from end of names
+new_cn_data$Name <- sub('p','',new_cn_data$Name)
+
+colnames(new_cn_data)[1] = 'Stake_Tag' # change name of column
+
+new_cn_initial <- subset(new_cn_data, Sample.Type == 'i') # subset initial conditions
+new_cn_initial <- new_cn_initial %>% arrange(Stake_Tag)
+new_cn_post <- subset(new_cn_data, Sample.Type == 'p') # subset post conditions
+new_cn_post <- new_cn_post %>% arrange(Stake_Tag)
+
+## calculating change in CN ##
+C.N.ratio.percent.dec <- (new_cn_initial$C.N..ratio - new_cn_post$C.N..ratio)
+C.N.ratio.percent <- (C.N.ratio.percent.dec/new_cn_initial$C.N..ratio)*100
+new_cn_initial['C.N.ratio.percent'] <- C.N.ratio.percent
+new_cn_post['C.N.ratio.percent'] <- C.N.ratio.percent
+
+all_new_cn_data <- rbind(new_cn_initial, new_cn_post) # combine initial & post df's
+new.cn.trts <- merge(x = scg.trts, y = all_new_cn_data, by = 'Stake_Tag') # combine new CN df to treatments
+
+new.cn.trts$Treatment <- factor(new.cn.trts$Treatment, levels = c('CTL', 'MTX', 'SML', 'LGE')) # adding levels to treatments
+
+new_cn_post.trts <- merge(x = scg.trts, y = new_cn_post, by = 'Stake_Tag') # subset post data
+new_cn_post.trts$Treatment <- factor(new_cn_post.trts$Treatment, levels = c('CTL', 'MTX', 'SML', 'LGE')) # adding levels to treatments
+
+## FINAL CN DF's ##
+finalized.cn.data <- rbind(og.cn.trts, new.cn.trts) # add og df to new df
+finalized.cn.data$Treatment <- factor(finalized.cn.data$Treatment, levels = c('CTL', 'MTX', 'SML', 'LGE')) # adding levels to treatments
+
+initial.cn.data <- subset(finalized.cn.data, Sample.Type == 'i') # subset finalized initial df
+finalized.post.cn <- subset(finalized.cn.data, Sample.Type == 'p') # subset finalized post df
+
+post.cn.trts.covars <- merge(covars, finalized.post.cn, by = 'Stake_Tag') # merge covars to post CN df
+
+```
+
+```{r Analyses & Models}
+
+## Carbon Models ##
+
+c.aov <- aov (C..... ~ Treatment,
+              data = post.cn.trts.covars) # anova
+summary(c.aov)
+
+c.mod <- lme(C..... ~ Treatment*dsi, 
+              random= ~1|PlotID.x,
+              method="REML",
+              #weights=
+                      #varIdent(form= ~ 1|Treatment.x), # this looks good
+              data = post.cn.trts.covars)
+summary(c.mod)
+anova(c.mod)
+rsquared(c.mod)
+emmeans(c.mod, list(pairwise ~ Treatment), adjust = "tukey") # post hoc
+plot(c.mod) #view residuals
+res.c.mod <- residuals(c.mod, type="normalized") #save residuals
+boxplot(res.c.mod ~ post.cn.trts.covars$Treatment.x) #plot residuals by treatment
+plot(res.c.mod ~ post.cn.trts.covars$dsi) #plot residuals by dsi
+qqnorm(res.c.mod)#Q-Q plot for normality 
+qqline(res.c.mod)#adds straight line ot Q-Q plot
+
+range(finalized.post.cn$C.....) # calculate range in post %C
+
+
+c.ctl.means <- finalized.post.cn %>% # calculate % change in post %C
+  group_by(Treatment) %>%
+  summarize(mean = mean(C.....))
+
+((41.83375 - 45.59429 / 45.59429) * 100)
+((45.59429 - 41.83375)/45.59429)*100
+((45.59429 - 47.09500)/45.59429)*100
+
+## Nitrogen Models ##
+
+n.aov <- aov (N..... ~ Treatment,
+              data = post.cn.trts.covars) # anova
+summary(n.aov)
+
+n.mod <- lme(N..... ~ Treatment*dsi, 
+             random= ~1|PlotID.x,
+             method="REML",
+             #weights=
+                     #varIdent(form= ~ 1|Treatment.x), # this looks good
+             data = post.cn.trts.covars)
+summary(n.mod)
+anova(n.mod)
+rsquared(n.mod)
+emmeans(n.mod, list(pairwise ~ Treatment), adjust = "tukey") # post hoc
+plot(n.mod) #view residuals
+res.n.mod <- residuals(n.mod, type="normalized") #save residuals
+boxplot(res.n.mod ~ post.cn.trts.covars$Treatment.x) #plot residuals by treatment
+plot(res.n.mod ~ post.cn.trts.covars$dsi) #plot residuals by dsi
+qqnorm(res.n.mod)#Q-Q plot for normality 
+qqline(res.n.mod)#adds straight line ot Q-Q plot
+    
+range(finalized.post.cn$N.....)  # calculate range in post %N
+
+## C:N Models ##
+
+cn.aov <- aov(C.N.ratio.percent ~ Treatment, 
+              data = post.cn.trts.covars) # anova
+summary(cn.aov)
+
+cn.mod <- lme(C.N.ratio.percent ~ Treatment.x*dsi, 
+              random= ~1|PlotID.x,
+              method="REML",
+              weights=
+                     varIdent(form= ~ 1|Treatment.x), # this looks good
+              data = post.cn.trts.covars)
+summary(cn.mod)
+anova(cn.mod)
+rsquared(cn.mod)
+emmeans(cn.mod, list(pairwise ~ Treatment.x), adjust = "tukey") # post hoc
+plot(cn.mod) #view residuals
+res.cn.mod <- residuals(cn.mod, type="normalized") #save residuals
+boxplot(res.cn.mod ~ post.cn.trts.covars$Treatment.x) #plot residuals by treatment
+plot(res.cn.mod ~ post.cn.trts.covars$dsi) #plot residuals by dsi
+qqnorm(res.cn.mod)#Q-Q plot for normality 
+qqline(res.cn.mod)#adds straight line ot Q-Q plot
+
+```
+
+```{r Visuals}
+
+## Carbon Figures ##
+
+final.c.fig <- ggplot(finalized.cn.data, aes(Treatment,C....., fill = Sample.Type)) +
+  geom_boxplot() +
+  labs(y='C (%)') +
+  #geom_point(alpha = 0.4, size = 2) +
+  theme_cowplot() +
+  #theme(legend.position = "none") +
+  theme(legend.title = element_blank()) +
+  scale_fill_grey(
+    labels=c('Initial Conditions', 'Post Conditions'), 
+    start = 0.5, end = 0.8) +
+  scale_x_discrete(labels=c("CTL" = "Control", "MTX" = "Matrix",
+                              "SML" = "Small Gap", 'LGE' = 'Large Gap'))
+final.c.fig # Final %C fig (initial vs. post)
+
+## Nitrogen Figures ##
+
+final.n.fig <- ggplot(finalized.cn.data, aes(Treatment,N....., fill = Sample.Type)) +
+  geom_boxplot() +
+  labs(y='N (%)') +
+  #geom_point(alpha = 0.4, size = 2) +
+  theme_cowplot() +
+  #theme(legend.position = "none") +
+  theme(legend.title = element_blank()) +
+  scale_fill_grey(
+    labels=c('Initial Conditions', 'Post Conditions'), 
+    start = 0.5, end = 0.8) +
+  scale_x_discrete(labels=c("CTL" = "Control", "MTX" = "Matrix",
+                              "SML" = "Small Gap", 'LGE' = 'Large Gap'))
+final.n.fig # final %N fig (initial vs. post)
+
+## C:N Figures ##
+
+final.cn_fig <- ggplot(finalized.cn.data, aes(Treatment, C.N..ratio, fill = Sample.Type)) + 
+  geom_boxplot() +
+  #geom_point(aes(group = Sample.Type)) +
+  #geom_dotplot(binaxis='y', stackdir='center', dotsize=1) +
+  #geom_jitter(size=2,alpha=0.9) +
+  theme_cowplot() +
+  #theme(legend.position = "none") +
+  labs(#title = 'C:N ratios decrease over time', 
+       y = 'C:N') +
+  theme(legend.title = element_blank(), axis.title.x=element_blank()) +
+  scale_fill_grey(labels=c('Initial', 'Post'), start = 0.5, end = 0.8) +
+  scale_x_discrete(labels=c("CTL" = "Control", "MTX" = "Matrix",
+                              "SML" = "Small Gap", 'LGE' = 'Large Gap'))
+  #annotate('text', x = 4, y = 95, label = 'p = 0.9846') +
+  #annotate('text', x = 4, y = 88, label = 'R^2 ==  0.0006678', parse = TRUE)
+final.cn_fig # initial vs. post C:N
+
+final.cn_change_fig <- ggplot(finalized.post.cn, aes(Treatment, C.N.ratio.percent)) + 
+  geom_boxplot() +
+  geom_point(alpha = 0.4, size = 2) +
+  #geom_jitter(size=2,alpha=0.9) +
+  theme_cowplot() +
+  #theme(legend.position = "none") +
+  labs(#title = 'Change in C:N greatest within large gap',
+       y = 'Change in C:N (%)',) +
+  theme(legend.title = element_blank()) +
+  scale_fill_grey(
+    #labels=c('Initial Conditions', 'Post Conditions'), 
+    start = 0.5, end = 0.8) +
+  scale_x_discrete(labels=c("CTL" = "Control", "MTX" = "Matrix",
+                              "SML" = "Small Gap", 'LGE' = 'Large Gap'))
+  #annotate('text', x = 4, y = 95, label = 'p = 0.9846') +
+  #annotate('text', x = 4, y = 88, label = 'R^2 ==  0.0006678', parse = TRUE)
+final.cn_change_fig # Change in C:N
+
+## Arranging Figs ##
+ggarrange(final.c.fig, final.n.fig, nrow = 2, common.legend = TRUE, legend = 'right') # C & N
+ggarrange(final.cn_fig, final.cn_change_fig, nrow = 2) # C:N
+
+```
+
