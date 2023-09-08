@@ -23,6 +23,7 @@ library(emmeans) # post hoc
 setwd('/Users/Paulina/Desktop/Data Portfolio') # working directory
 
 scg.trts <- read.csv('SCG_Stake_Data_Jan_2023.csv') # import treatment data
+
 scg.trts$Plot <- sub("_", "", scg.trts$Plot)
 scg.trts$Plot <- sub("_", "", scg.trts$Plot) # removing underscores in Plot
 scg.trts$PlotID <- scg.trts$Plot
